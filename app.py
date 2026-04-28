@@ -29,8 +29,8 @@ last_period_end = current_period_start - timedelta(days=1)
 last_period_start = last_period_end - timedelta(days=90)
 
 # --- 3. UI SETUP ---
-st.set_page_config(page_title="Looker-Ready Ahrefs Auditor", layout="wide")
-st.title("🛡️ Looker Studio SEO Data Exporter")
+st.set_page_config(page_title="Ahrefs Auditor", layout="wide")
+st.title("Ahrefs SEO Data Exporter")
 
 st.info(f"**Period:** {current_period_start} to {current_period_end} vs {last_period_start} to {last_period_end}")
 
@@ -40,7 +40,7 @@ client_site = st.text_input("Client Domain")
 competitors = st.text_area("Competitor Domains (one per line)")
 
 # --- 4. EXECUTION ---
-if st.button("Generate & Sync to Looker Sheets"):
+if st.button("Generate & Sync to Sheets"):
     if not api_key or not client_site or not client_name:
         st.error("Missing mandatory inputs.")
     else:
