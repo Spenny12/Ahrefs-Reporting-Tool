@@ -22,9 +22,9 @@ def fetch_ahrefs(endpoint, params, api_key):
         return None
 
 # --- 2. AUTOMATIC QUARTERLY DATES ---
-# Calculates the last 90 days vs the 90 days before that
+# Calculates a rolling 90-day window and a 90-day comparison window
 today = datetime.today().date()
-current_period_end = today - timedelta(days=2)  # 2-day buffer for Ahrefs data processing
+current_period_end = today - timedelta(days=2)  # Buffer for data freshness
 current_period_start = current_period_end - timedelta(days=90)
 
 last_period_end = current_period_start - timedelta(days=1)
@@ -34,8 +34,8 @@ last_period_start = last_period_end - timedelta(days=90)
 st.set_page_config(page_title="Ahrefs Quarterly Auditor", layout="wide")
 st.title("🛡️ Automatic Quarterly Competitor Audit")
 
-st.info(f"**Analysis Window:** {current_period_start} to {current_period_end}  \n"
-        f"**Compared Against:** {last_period_start} to {last_period_end}")
+st.info(f"**Analysis Window:** {current_period_start} to {current_period_end} (90 Days)  \n"
+        f"**Comparison Window:** {last_period_start} to {last_period_end} (90 Days)")
 
 api_key = st.sidebar.text_input("Ahrefs API Key", type="password")
 
@@ -46,7 +46,7 @@ try:
     sh = gc.open_by_key(MASTER_SHEET_ID)
     existing_tabs = [ws.title for ws in sh.worksheets()]
 except:
-    st.sidebar.warning("GSheet Connection Pending...")
+    st.sidebar.warning("Waiting for GSheet Auth...")
 
 tab_mode = st.sidebar.radio("Sheet Mode", ["Existing Client", "New Client"])
 target_tab = st.sidebar.selectbox("Select Tab", existing_tabs) if tab_mode == "Existing Client" else st.sidebar.text_input("New Tab Name")
@@ -59,7 +59,7 @@ if st.button("Generate Quarterly Audit"):
     if not api_key or not target_tab or not client_site:
         st.error("Missing Ahrefs API Key, Client Domain, or Tab Name.")
     else:
-        with st.spinner("Analyzing the last 6 months of data..."):
+        with st.spinner("Deep-diving into Ahrefs data..."):
             domains = [client_site.strip()] + [c.strip() for c in competitors.split("\n") if c.strip()]
 
             summary_list = []
@@ -67,7 +67,7 @@ if st.button("Generate Quarterly Audit"):
             site_changes = []
 
             for domain in domains:
-                # A. SUMMARY STATS
+                # A. SUMMARY STATS (Metrics)
                 m_curr = fetch_ahrefs("site-explorer/metrics", {"target": domain, "date": current_period_end.isoformat()}, api_key)
                 m_last = fetch_ahrefs("site-explorer/metrics", {"target": domain, "date": last_period_end.isoformat()}, api_key)
 
@@ -85,14 +85,14 @@ if st.button("Generate Quarterly Audit"):
                 })
 
                 # B. KEYWORD PERFORMANCE
-                # 1. Top 10 by Traffic Increase
+                # Top 10 by Traffic Increase
                 kw_gain_params = {
                     "target": domain, "limit": 10, "order_by": "traffic_change:desc",
                     "date": current_period_end.isoformat(), "date_compared": last_period_end.isoformat()
                 }
                 gainer_res = fetch_ahrefs("site-explorer/organic-keywords", kw_gain_params, api_key)
 
-                # 2. Top 10 Volume (New in Positions 1-3)
+                # Top 10 Volume (New in Positions 1-3)
                 top3_params = {
                     "target": domain, "limit": 10, "order_by": "volume:desc",
                     "where": f'[["position", "lte", 3], ["first_seen", "gt", "{last_period_end.isoformat()}"]]'
@@ -100,10 +100,16 @@ if st.button("Generate Quarterly Audit"):
                 top3_res = fetch_ahrefs("site-explorer/organic-keywords", top3_params, api_key)
 
                 for k in (gainer_res.get('keywords', []) if gainer_res else []):
-                    top_new_kws.append({"Domain": domain, "Type": "Traffic Gainer", "Keyword": k['keyword'], "Volume": k['volume'], "Position": k['position'], "Traffic Change": k.get('traffic_change', 0)})
+                    top_new_kws.append({
+                        "Domain": domain, "Type": "Traffic Gainer", "Keyword": k['keyword'],
+                        "Volume": k['volume'], "Position": k['position'], "Traffic Change": k.get('traffic_change', 0)
+                    })
 
                 for k in (top3_res.get('keywords', []) if top3_res else []):
-                    top_new_kws.append({"Domain": domain, "Type": "New Top 3 Entry", "Keyword": k['keyword'], "Volume": k['volume'], "Position": k['position'], "URL": k['url']})
+                    top_new_kws.append({
+                        "Domain": domain, "Type": "New Top 3 Entry", "Keyword": k['keyword'],
+                        "Volume": k['volume'], "Position": k['position'], "URL": k['url']
+                    })
 
                 # C. SITE CHANGES (New Pages)
                 page_params = {"target": domain, "limit": 20, "where": f'[["first_seen", "gt", "{last_period_end.isoformat()}"]]'}
@@ -111,7 +117,7 @@ if st.button("Generate Quarterly Audit"):
                 for p in (pages_res.get('pages', []) if pages_res else []):
                     site_changes.append({"Domain": domain, "New Page URL": p['url'], "First Seen": p['first_seen']})
 
-            # --- 5. EXPORT TO SHEETS ---
+            # --- 5. ROBUST EXPORT TO SHEETS ---
             try:
                 gc = get_gspread_client()
                 sh = gc.open_by_key(MASTER_SHEET_ID)
@@ -123,27 +129,56 @@ if st.button("Generate Quarterly Audit"):
 
                 ws.clear()
 
-                report_header = [
-                    ["QUARTERLY PERFORMANCE REPORT"],
-                    ["CURRENT PERIOD:", f"{current_period_start} to {current_period_end}"],
-                    ["COMPARISON PERIOD:", f"{last_period_start} to {last_period_end}"],
-                    [""],
-                    ["--- SUMMARY PERFORMANCE ---"]
-                ]
-
                 df_sum = pd.DataFrame(summary_list)
                 df_kws = pd.DataFrame(top_new_kws)
                 df_pages = pd.DataFrame(site_changes)
 
-                final_output = report_header + [df_sum.columns.tolist()] + df_sum.values.tolist() + [
-                    [""], ["--- TOP NEW KEYWORDS (By Traffic Gain & Top 3 Volume) ---"],
-                    [df_kws.columns.tolist()] + df_kws.values.tolist() if not df_kws.empty else [["No keywords found"]],
-                    [""], ["--- SITE CHANGES (New Pages Discovered) ---"],
-                    [df_pages.columns.tolist()] + df_pages.values.tolist() if not df_pages.empty else [["No new pages found"]]
+                # Find the widest table to keep the sheet consistent
+                widths = [len(df_sum.columns)]
+                if not df_kws.empty: widths.append(len(df_kws.columns))
+                if not df_pages.empty: widths.append(len(df_pages.columns))
+                max_width = max(widths)
+
+                def pad_row(row_list, width):
+                    """Pads a row with empty strings so all rows have the same column count."""
+                    return [str(x) if x is not None else "" for x in row_list] + [""] * (width - len(row_list))
+
+                # Build the final output list
+                final_output = [
+                    pad_row(["QUARTERLY PERFORMANCE REPORT"], max_width),
+                    pad_row(["CURRENT PERIOD:", f"{current_period_start} to {current_period_end}"], max_width),
+                    pad_row(["COMPARISON PERIOD:", f"{last_period_start} to {last_period_end}"], max_width),
+                    pad_row([""], max_width),
+                    pad_row(["--- SUMMARY PERFORMANCE ---"], max_width),
+                    pad_row(df_sum.columns.tolist(), max_width)
                 ]
 
+                for row in df_sum.values.tolist():
+                    final_output.append(pad_row(row, max_width))
+
+                # Add Keyword Section
+                final_output.append(pad_row([""], max_width))
+                final_output.append(pad_row(["--- TOP NEW KEYWORDS (By Traffic Gain & Top 3 Volume) ---"], max_width))
+                if not df_kws.empty:
+                    final_output.append(pad_row(df_kws.columns.tolist(), max_width))
+                    for row in df_kws.values.tolist():
+                        final_output.append(pad_row(row, max_width))
+                else:
+                    final_output.append(pad_row(["No new keywords found for this period"], max_width))
+
+                # Add Site Changes Section
+                final_output.append(pad_row([""], max_width))
+                final_output.append(pad_row(["--- SITE CHANGES (New Pages Discovered) ---"], max_width))
+                if not df_pages.empty:
+                    final_output.append(pad_row(df_pages.columns.tolist(), max_width))
+                    for row in df_pages.values.tolist():
+                        final_output.append(pad_row(row, max_width))
+                else:
+                    final_output.append(pad_row(["No new pages discovered for this period"], max_width))
+
+                # Batch Update Google Sheets
                 ws.update("A1", final_output)
-                st.success(f"Successfully exported to Google Sheets tab: {target_tab}")
-                st.balloons()
+
+                st.success(f"Successfully exported to: {target_tab}")
             except Exception as e:
                 st.error(f"Spreadsheet Error: {e}")
