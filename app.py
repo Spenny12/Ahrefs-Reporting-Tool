@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 # --- SETTINGS & AUTH ---
 # Replace this with your actual Shared Google Sheet ID (from the URL)
-MASTER_SHEET_ID = "YOUR_SHARED_GOOGLE_SHEET_ID_HERE"
+MASTER_SHEET_ID = "1dzt0pUF1c3ffLh1_zxiCiwiYKO4-3jFkDx1ErR49m1Q"
 
 def get_gspread_client():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
@@ -44,32 +44,29 @@ if st.button("Run & Export"):
         st.error("Please enter an Ahrefs API Key.")
     else:
         with st.spinner("Analyzing data..."):
+            # 1. Fetch the data first
             dates = get_quarters()
-            comp_list = [c.strip() for c in competitors.split("\n") if c.strip()][:5]
-            all_domains = [client_site] + comp_list
-            
-            results = []
-            for domain in all_domains:
-                m_now = fetch_ahrefs_metrics(domain, dates['recent'], api_key)
-                m_prev = fetch_ahrefs_metrics(domain, dates['preceding'], api_key)
-                
-                results.append({
-                    "Domain": domain,
-                    "Ref. Domains": m_now.get('refdomains', 0),
-                    "RD Change": m_now.get('refdomains', 0) - m_prev.get('refdomains', 0),
-                    "Backlinks": m_now.get('backlinks', 0),
-                    "Keywords": m_now.get('org_keywords', 0),
-                    "Date Pulled": datetime.now().strftime("%Y-%m-%d")
-                })
-            
+            # ... (your Ahrefs fetching logic) ...
+
             df = pd.DataFrame(results)
             st.table(df)
 
-            # --- EXPORT TO SHARED SHEET ---
-            gc = get_gspread_client()
-            sh = gc.open_by_key(MASTER_SHEET_ID)
-            tab_name = f"{client_site}_{datetime.now().strftime('%M%S')}"
-            
-            worksheet = sh.add_worksheet(title=tab_name, rows="100", cols="20")
-            worksheet.update([df.columns.values.tolist()] + df.values.tolist())
-            st.success(f"✅ Exported to tab: {tab_name}")
+            # 2. Connection logic MUST be inside the button click
+            try:
+                gc = get_gspread_client()
+
+                # Use .strip() to prevent invisible character errors
+                sh = gc.open_by_key(MASTER_SHEET_ID.strip())
+
+                tab_name = f"{client_site}_{datetime.now().strftime('%M%S')}"
+                worksheet = sh.add_worksheet(title=tab_name, rows="100", cols="20")
+
+                # Convert DataFrame to list format for gspread
+                data_to_upload = [df.columns.values.tolist()] + df.values.tolist()
+                worksheet.update(data_to_upload)
+
+                st.success(f"✅ Exported to tab: {tab_name}")
+            except gspread.exceptions.SpreadsheetNotFound:
+                st.error("Google Sheet not found. Please double-check the ID and ensure the Service Account email is an Editor.")
+            except Exception as e:
+                st.error(f"An unexpected error occurred: {e}")
