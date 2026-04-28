@@ -21,39 +21,25 @@ def fetch_ahrefs(endpoint, params, api_key):
     except:
         return None
 
-# --- 2. UI SETUP ---
-st.set_page_config(page_title="Advanced SEO Auditor", layout="wide")
-st.title("🛡️ Advanced Competitor Intelligence Tool")
+# --- 2. AUTOMATIC QUARTERLY DATES ---
+# Calculates the last 90 days vs the 90 days before that
+today = datetime.today().date()
+current_period_end = today - timedelta(days=2)  # 2-day buffer for Ahrefs data processing
+current_period_start = current_period_end - timedelta(days=90)
+
+last_period_end = current_period_start - timedelta(days=1)
+last_period_start = last_period_end - timedelta(days=90)
+
+# --- 3. UI SETUP ---
+st.set_page_config(page_title="Ahrefs Quarterly Auditor", layout="wide")
+st.title("🛡️ Automatic Quarterly Competitor Audit")
+
+st.info(f"**Analysis Window:** {current_period_start} to {current_period_end}  \n"
+        f"**Compared Against:** {last_period_start} to {last_period_end}")
 
 api_key = st.sidebar.text_input("Ahrefs API Key", type="password")
 
-# --- 3. REFACTORED DATE CONTROLS ---
-with st.sidebar.expander("📅 Reporting Period", expanded=True):
-    date_mode = st.radio("Period Type", ["Quarterly", "Monthly"])
-    today = datetime.today()
-
-    if date_mode == "Quarterly":
-        # Start of current partial quarter
-        curr_q_start = datetime(today.year, 3 * ((today.month - 1) // 3) + 1, 1)
-        # End of last full quarter
-        current_period_end = (curr_q_start - timedelta(days=1)).date()
-        # Start of last full quarter
-        current_period_start = datetime(current_period_end.year, 3 * ((current_period_end.month - 1) // 3) + 1, 1).date()
-        # Comparison period (the quarter before that)
-        last_period_end = (datetime.combine(current_period_start, datetime.min.time()) - timedelta(days=1)).date()
-        last_period_start = datetime(last_period_end.year, 3 * ((last_period_end.month - 1) // 3) + 1, 1).date()
-    else:
-        # Current Period = Last full month
-        current_period_start = (today.replace(day=1) - timedelta(days=1)).replace(day=1).date()
-        current_period_end = (today.replace(day=1) - timedelta(days=1)).date()
-        # Comparison Period = Month before that
-        last_period_start = (current_period_start - timedelta(days=1)).replace(day=1).date()
-        last_period_end = (current_period_start - timedelta(days=1)).date()
-
-    st.write(f"**Current Period:** {current_period_start} to {current_period_end}")
-    st.write(f"**Comparison Period:** {last_period_start} to {last_period_end}")
-
-# Tab Logic
+# Google Sheets Tab Sync
 existing_tabs = []
 try:
     gc = get_gspread_client()
@@ -69,11 +55,11 @@ client_site = st.text_input("Client Domain (e.g., example.com)")
 competitors = st.text_area("Competitor Domains (one per line)")
 
 # --- 4. EXECUTION ---
-if st.button("Generate Full Audit & Export"):
-    if not api_key or not target_tab:
-        st.error("Please provide API Key and Tab Name.")
+if st.button("Generate Quarterly Audit"):
+    if not api_key or not target_tab or not client_site:
+        st.error("Missing Ahrefs API Key, Client Domain, or Tab Name.")
     else:
-        with st.spinner("Fetching data from Ahrefs..."):
+        with st.spinner("Analyzing the last 6 months of data..."):
             domains = [client_site.strip()] + [c.strip() for c in competitors.split("\n") if c.strip()]
 
             summary_list = []
@@ -98,7 +84,7 @@ if st.button("Generate Full Audit & Export"):
                     "KW Change": curr_met.get('org_keywords', 0) - last_met.get('org_keywords', 0)
                 })
 
-                # B. TOP NEW KEYWORDS
+                # B. KEYWORD PERFORMANCE
                 # 1. Top 10 by Traffic Increase
                 kw_gain_params = {
                     "target": domain, "limit": 10, "order_by": "traffic_change:desc",
@@ -109,7 +95,7 @@ if st.button("Generate Full Audit & Export"):
                 # 2. Top 10 Volume (New in Positions 1-3)
                 top3_params = {
                     "target": domain, "limit": 10, "order_by": "volume:desc",
-                    "where": f'[["position", "lte", 3], ["first_seen", "gt", "{last_period_end}"]]'
+                    "where": f'[["position", "lte", 3], ["first_seen", "gt", "{last_period_end.isoformat()}"]]'
                 }
                 top3_res = fetch_ahrefs("site-explorer/organic-keywords", top3_params, api_key)
 
@@ -120,12 +106,12 @@ if st.button("Generate Full Audit & Export"):
                     top_new_kws.append({"Domain": domain, "Type": "New Top 3 Entry", "Keyword": k['keyword'], "Volume": k['volume'], "Position": k['position'], "URL": k['url']})
 
                 # C. SITE CHANGES (New Pages)
-                page_params = {"target": domain, "limit": 20, "where": f'[["first_seen", "gt", "{last_period_end}"]]'}
+                page_params = {"target": domain, "limit": 20, "where": f'[["first_seen", "gt", "{last_period_end.isoformat()}"]]'}
                 pages_res = fetch_ahrefs("site-explorer/pages", page_params, api_key)
                 for p in (pages_res.get('pages', []) if pages_res else []):
                     site_changes.append({"Domain": domain, "New Page URL": p['url'], "First Seen": p['first_seen']})
 
-            # --- 5. STRUCTURED EXPORT ---
+            # --- 5. EXPORT TO SHEETS ---
             try:
                 gc = get_gspread_client()
                 sh = gc.open_by_key(MASTER_SHEET_ID)
@@ -137,9 +123,9 @@ if st.button("Generate Full Audit & Export"):
 
                 ws.clear()
 
-                # Formatting output for a clean report
                 report_header = [
-                    ["REPORT PERIOD:", f"{current_period_start} to {current_period_end}"],
+                    ["QUARTERLY PERFORMANCE REPORT"],
+                    ["CURRENT PERIOD:", f"{current_period_start} to {current_period_end}"],
                     ["COMPARISON PERIOD:", f"{last_period_start} to {last_period_end}"],
                     [""],
                     ["--- SUMMARY PERFORMANCE ---"]
@@ -149,7 +135,6 @@ if st.button("Generate Full Audit & Export"):
                 df_kws = pd.DataFrame(top_new_kws)
                 df_pages = pd.DataFrame(site_changes)
 
-                # Assemble final block
                 final_output = report_header + [df_sum.columns.tolist()] + df_sum.values.tolist() + [
                     [""], ["--- TOP NEW KEYWORDS (By Traffic Gain & Top 3 Volume) ---"],
                     [df_kws.columns.tolist()] + df_kws.values.tolist() if not df_kws.empty else [["No keywords found"]],
@@ -158,6 +143,7 @@ if st.button("Generate Full Audit & Export"):
                 ]
 
                 ws.update("A1", final_output)
-                st.success(f"Successfully exported to {target_tab}!")
+                st.success(f"Successfully exported to Google Sheets tab: {target_tab}")
+                st.balloons()
             except Exception as e:
                 st.error(f"Spreadsheet Error: {e}")
